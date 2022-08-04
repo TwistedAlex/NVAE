@@ -11,7 +11,8 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from time import time
-
+import PIL.Image
+import pathlib
 from torch.multiprocessing import Process
 from torch.cuda.amp import autocast
 
@@ -37,12 +38,15 @@ def set_bn(model, bn_eval_mode, num_samples=1, t=1.0, iter=100):
 def main(eval_args):
     # ensures that weight initializations are all the same
     logging = utils.Logger(eval_args.local_rank, eval_args.save)
-
+    mode = eval_args.mode
+    save_path = f'output/{mode}/'
+    pathlib.Path(f'output/{mode}/').mkdir(parents=True, exist_ok=True)
     # load a checkpoint
     logging.info('loading the model at:')
     logging.info(eval_args.checkpoint)
     checkpoint = torch.load(eval_args.checkpoint, map_location='cpu')
     args = checkpoint['args']
+    count = 0
 
     if not hasattr(args, 'ada_groups'):
         logging.info('old model, no ada groups was found.')
@@ -99,12 +103,12 @@ def main(eval_args):
         logging.info('fid is %f' % fid)
     else:
         bn_eval_mode = not eval_args.readjust_bn
-        total_samples = 50000 // eval_args.world_size          # num images per gpu
-        num_samples = 100                                      # sampling batch size
-        num_iter = int(np.ceil(total_samples / num_samples))   # num iterations per gpu
+        total_samples = 1000 // eval_args.world_size          # num images per gpu
+        num_samples = 10                                      # sampling batch size
+        num_iter = 100   # num iterations per gpu
 
         with torch.no_grad():
-            n = int(np.floor(np.sqrt(num_samples)))
+            # n = int(np.floor(np.sqrt(num_samples)))
             set_bn(model, bn_eval_mode, num_samples=16, t=eval_args.temp, iter=500)
             for ind in range(num_iter):     # sampling is repeated.
                 torch.cuda.synchronize()
@@ -118,18 +122,24 @@ def main(eval_args):
                 end = time()
                 logging.info('sampling time per batch: %0.3f sec', (end - start))
 
-                visualize = False
-                if visualize:
-                    output_tiled = utils.tile_image(output_img, n).cpu().numpy().transpose(1, 2, 0)
-                    output_tiled = np.asarray(output_tiled * 255, dtype=np.uint8)
-                    output_tiled = np.squeeze(output_tiled)
-
-                    plt.imshow(output_tiled)
-                    plt.show()
-                else:
-                    file_path = os.path.join(eval_args.save, 'gpu_%d_samples_%d.npz' % (eval_args.local_rank, ind))
-                    np.savez_compressed(file_path, samples=output_img.cpu().numpy())
-                    logging.info('Saved at: {}'.format(file_path))
+                for idx in range(10):
+                    output_single = output_img[idx].cpu().numpy().transpose(1, 2, 0)
+                    output_single = np.asarray(output_single * 255, dtype=np.uint8)
+                    PIL.Image.fromarray(output_single, 'RGB').save(
+                        save_path + str(count).zfill(5) + '.png')
+                    count = count + 1
+                # visualize = False
+                # if visualize:
+                #     output_tiled = utils.tile_image(output_img, n).cpu().numpy().transpose(1, 2, 0)
+                #     output_tiled = np.asarray(output_tiled * 255, dtype=np.uint8)
+                #     output_tiled = np.squeeze(output_tiled)
+                #
+                #     plt.imshow(output_tiled)
+                #     plt.show()
+                # else:
+                #     file_path = os.path.join(eval_args.save, 'gpu_%d_samples_%d.npz' % (eval_args.local_rank, ind))
+                #     np.savez_compressed(file_path, samples=output_img.cpu().numpy())
+                #     logging.info('Saved at: {}'.format(file_path))
 
 
 if __name__ == '__main__':
@@ -164,6 +174,8 @@ if __name__ == '__main__':
                         help='seed used for initialization')
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
+    parser.add_argument('--mode', type=str, default='ffhq',
+                        help='model type')
 
     args = parser.parse_args()
     utils.create_exp_dir(args.save)
